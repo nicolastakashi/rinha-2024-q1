@@ -1,0 +1,29 @@
+version: "3.5"
+
+services:
+  api:
+    image: 00wesley/rinha-2024-golang:latest
+    build: .
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.35"
+          memory: "45MB"
+  db:
+    image: postgres:alpine
+    hostname: db
+    environment:
+      - POSTGRES_PASSWORD=db
+      - POSTGRES_USER=db
+      - POSTGRES_DB=db
+    volumes:
+      - ./db.sql:/docker-entrypoint-initdb.d/db.sql
+      - ./postgresql.conf:/docker-entrypoint-initdb.d/postgresql.config_file
+    command: postgres -c config_file=/docker-entrypoint-initdb.d/postgresql.config_file
+    deploy:
+      resources:
+        limits:
+          cpus: "0.55"
+          memory: "420MB"

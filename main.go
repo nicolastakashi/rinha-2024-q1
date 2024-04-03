@@ -10,9 +10,24 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-var db *pgxpool.Pool
+var (
+	db               *pgxpool.Pool
+	httpRequestTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "http_request_total",
+		Help: "Total number of HTTP requests",
+	}, []string{"code", "method", "path"})
+
+	httpRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "http_request_duration_seconds",
+		Help:    "Duration of HTTP requests",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"code", "method", "path"})
+)
 
 func main() {
 	println("Starting...")
@@ -46,6 +61,7 @@ func main() {
 
 	http.HandleFunc("POST /clientes/{id}/transacoes", handleTransactions())
 	http.HandleFunc("GET /clientes/{id}/extrato", handleStatement())
+	http.Handle("/metrics", promhttp.Handler())
 
 	println("Listening on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -54,6 +70,7 @@ func main() {
 }
 
 func handleTransactions() http.HandlerFunc {
+	start := time.Now()
 	type transactionRequest struct {
 		Value     int    `json:"valor"`
 		Type      string `json:"tipo"`
@@ -63,21 +80,28 @@ func handleTransactions() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		var tr transactionRequest
+		const path = " /clientes/{id}/transacoes"
 		if err := json.NewDecoder(r.Body).Decode(&tr); err != nil {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("422", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("422", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 
 		if tr.Value < 1 {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("422", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("422", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 
 		if tr.Type != "d" && tr.Type != "c" {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("422", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("422", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 
@@ -85,6 +109,8 @@ func handleTransactions() http.HandlerFunc {
 		if descLen < 1 || descLen > 10 {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("422", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("422", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 
@@ -93,12 +119,16 @@ func handleTransactions() http.HandlerFunc {
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("404", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("404", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 
 		if customerID < 1 || customerID > 5 {
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("404", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("404", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 
@@ -114,11 +144,15 @@ func handleTransactions() http.HandlerFunc {
 		if err != nil || !success {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("422", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("422", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"limite": ` + fmt.Sprintf("%d", limit) + `, "saldo": ` + fmt.Sprintf("%d", newBalance) + `}`))
+		httpRequestTotal.WithLabelValues("200", r.Method, path).Inc()
+		httpRequestDuration.WithLabelValues("200", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 	}
 }
 
@@ -141,18 +175,25 @@ func handleStatement() http.HandlerFunc {
 		Transactions []transactionRes `json:"ultimas_transacoes"`
 	}
 
+	const path = " /clientes/{id}/extrato"
+
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		customerIDStr := r.PathValue("id")
 		customerID, err := strconv.Atoi(customerIDStr)
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("404", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("404", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 
 		if customerID < 1 || customerID > 5 {
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("404", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("404", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 
@@ -161,6 +202,8 @@ func handleStatement() http.HandlerFunc {
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("500", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("500", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 		defer tx.Rollback(r.Context())
@@ -171,6 +214,8 @@ func handleStatement() http.HandlerFunc {
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{}`))
+			httpRequestTotal.WithLabelValues("500", r.Method, path).Inc()
+			httpRequestDuration.WithLabelValues("500", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 			return
 		}
 		defer rows.Close()
@@ -191,6 +236,8 @@ func handleStatement() http.HandlerFunc {
 
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(resp)
+		httpRequestTotal.WithLabelValues("200", r.Method, path).Inc()
+		httpRequestDuration.WithLabelValues("200", r.Method, path).Observe(float64(time.Since(start).Seconds()))
 	}
 
 }
